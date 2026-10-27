@@ -1,0 +1,162 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum ModelAvailability {
+  AVAILABLE
+  DEGRADED
+  UNAVAILABLE
+}
+
+enum ResponseAttemptStatus {
+  PENDING
+  STREAMING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum ResponseErrorCategory {
+  UNAVAILABLE
+  TIMED_OUT
+  RATE_LIMITED
+  CANCELLED
+  INTERRUPTED
+}
+
+model User {
+  id           String       @id @default(uuid()) @db.Uuid
+  clerkSubject String       @unique
+  comparisons  Comparison[]
+  votes        Vote[]
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+}
+
+model Model {
+  id           String            @id
+  name         String
+  description  String
+  availability ModelAvailability @default(AVAILABLE)
+  versions     ModelVersion[]
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+}
+
+model ModelVersion {
+  id                  String       @id @default(uuid()) @db.Uuid
+  modelId             String
+  providerModelId     String
+  versionLabel        String
+  capabilities        Json
+  contextWindowTokens Int?
+  effectiveFrom       DateTime
+  effectiveTo         DateTime?
+  model               Model        @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  contestants         Contestant[]
+  createdAt           DateTime     @default(now())
+
+  @@unique([modelId, versionLabel])
+  @@index([modelId])
+}
+
+model Comparison {
+  id               String            @id @default(uuid()) @db.Uuid
+  promptCiphertext Bytes?
+  promptKeyVersion String?
+  ownerId          String?           @db.Uuid
+  claimTokenHash   Bytes?            @unique
+  claimExpiresAt   DateTime?
+  revealedAt       DateTime?
+  contentDeletedAt DateTime?
+  owner            User?             @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  contestants      Contestant[]
+  responseAttempts ResponseAttempt[]
+  vote             Vote?
+  voteRevisions    VoteRevision[]
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@index([ownerId, createdAt(sort: Desc)])
+  @@index([claimExpiresAt])
+}
+
+model Contestant {
+  id               String            @id @default(uuid()) @db.Uuid
+  comparisonId     String            @db.Uuid
+  modelVersionId   String            @db.Uuid
+  displayPosition  Int               @db.SmallInt
+  comparison       Comparison        @relation(fields: [comparisonId], references: [id], onDelete: Cascade)
+  modelVersion     ModelVersion      @relation(fields: [modelVersionId], references: [id], onDelete: Restrict)
+  responseAttempts ResponseAttempt[]
+  createdAt        DateTime          @default(now())
+
+  @@unique([comparisonId, displayPosition])
+  @@unique([comparisonId, modelVersionId])
+  @@unique([id, comparisonId])
+  @@index([modelVersionId])
+}
+
+model ResponseAttempt {
+  id                      String                 @id @default(uuid()) @db.Uuid
+  contestantId            String                 @db.Uuid
+  comparisonId            String                 @db.Uuid
+  attemptNumber           Int
+  responseCiphertext      Bytes?
+  responseKeyVersion      String?
+  status                  ResponseAttemptStatus  @default(PENDING)
+  errorCategory           ResponseErrorCategory?
+  startedAt               DateTime
+  firstTokenAt            DateTime?
+  completedAt             DateTime?
+  inputTokens             Int?
+  outputTokens            Int?
+  costUsdTenThousandths   Int                    @default(0)
+  contestant              Contestant             @relation(fields: [contestantId, comparisonId], references: [id, comparisonId], onDelete: Cascade)
+  comparison              Comparison             @relation(fields: [comparisonId], references: [id], onDelete: Cascade)
+  selectedByVoteRevisions VoteRevision[]
+  createdAt               DateTime               @default(now())
+
+  @@unique([contestantId, attemptNumber])
+  @@unique([id, comparisonId])
+  @@index([comparisonId, status])
+}
+
+model Vote {
+  id                String         @id @default(uuid()) @db.Uuid
+  comparisonId      String         @unique @db.Uuid
+  userId            String?        @db.Uuid
+  currentRevisionId String         @unique @db.Uuid
+  comparison        Comparison     @relation(fields: [comparisonId], references: [id], onDelete: Restrict)
+  user              User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  revisions         VoteRevision[] @relation("VoteRevisions")
+  currentRevision   VoteRevision   @relation("CurrentVoteRevision", fields: [currentRevisionId, id, comparisonId], references: [id, voteId, comparisonId], onDelete: Restrict)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  @@unique([id, comparisonId])
+  @@unique([currentRevisionId, id, comparisonId])
+  @@index([userId, updatedAt(sort: Desc)])
+}
+
+model VoteRevision {
+  id                String          @id @default(uuid()) @db.Uuid
+  voteId            String          @db.Uuid
+  comparisonId      String          @db.Uuid
+  selectedAttemptId String          @db.Uuid
+  sequence          Int
+  vote              Vote            @relation("VoteRevisions", fields: [voteId, comparisonId], references: [id, comparisonId], onDelete: Cascade)
+  currentForVote    Vote?           @relation("CurrentVoteRevision")
+  comparison        Comparison      @relation(fields: [comparisonId], references: [id], onDelete: Restrict)
+  selectedAttempt   ResponseAttempt @relation(fields: [selectedAttemptId, comparisonId], references: [id, comparisonId], onDelete: Restrict)
+  createdAt         DateTime        @default(now())
+
+  @@unique([voteId, sequence])
+  @@unique([id, voteId, comparisonId])
+  @@index([selectedAttemptId])
+}
